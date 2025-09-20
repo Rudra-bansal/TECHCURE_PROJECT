@@ -1,55 +1,121 @@
-import google.generativeai as genai
-from dotenv import load_dotenv
+# storygeneration.py
 import os
+import json
+import re
+from dotenv import load_dotenv
+import google.generativeai as genai
+from json import JSONDecodeError
 
-# Load environment variables
+# --- Load API key safely ---
 load_dotenv()
+API_KEY = os.getenv("GOOGLE_API_KEY")
+if not API_KEY:
+    raise EnvironmentError("❌ GOOGLE_API_KEY not found. Please set it in your .env file.")
 
-# Configure Gemini with API key from .env
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+genai.configure(api_key=API_KEY)
 
-# Select model
-model = genai.GenerativeModel("gemini-1.5-flash")
 
-print("✨ Welcome to Artisan Storytelling Assistant ✨")
-print("This tool helps local artisans promote their products through storytelling.\n")
+def build_prompt(artisan_name, product, material, inspiration, target_audience):
+    """
+    Build a concise prompt for Gemini to generate a marketing reel script.
+    Includes system instructions and a JSON example for robust output.
+    """
+    return f"""
+You are a scriptwriter for social media marketing reels. Your task is to generate a compelling and concise script for a product created by a local artisan.
 
-while True:
-    # Collect artisan/product details
-    artisan_name = input("👉 Enter artisan's name: ")
-    product = input("👉 What product do they make? ")
-    material = input("👉 What material is used? (e.g., clay, wood, fabric): ")
-    inspiration = input("👉 What is their inspiration or tradition? ")
-    target_audience = input("👉 Who is the target audience? (e.g., young buyers, tourists, eco-conscious customers): ")
+Instructions:
+1.  **The output must be a JSON array of 3-4 objects.**
+2.  **Each object must have the keys `scene`, `voiceover`, and `text`.**
+3.  **Keep the total voiceover content around 100-120 words.**
+4.  **The final scene must be a clear Call to Action (CTA).**
 
-    # Build prompt
-    prompt = (
-        f"Create a marketing story for artisan {artisan_name}, "
-        f"who makes {product} using {material}. Their inspiration is {inspiration}. "
-        f"Target audience: {target_audience}. "
-        f"Give me:\n"
-        f"1. A short tagline (5-10 words)\n"
-        f"2. A social media caption (1-2 sentences)\n"
-        f"3. A detailed story (2-3 paragraphs) highlighting artisan's journey and uniqueness."
+Context:
+- Artisan: {artisan_name}
+- Product: {product}
+- Material: {material}
+- Inspiration: {inspiration}
+- Target audience: {target_audience}
+
+Example JSON format:
+```json
+[
+  {{
+    "scene": "A close-up shot of the artisan's hands shaping the clay.",
+    "voiceover": "Every piece tells a story, handcrafted with passion and tradition.",
+    "text": "Crafted by hand."
+  }},
+  {{
+    "scene": "The finished ceramic vase, slowly rotating on a pedestal with light catching its unique glaze.",
+    "voiceover": "This isn't just a vase; it's a piece of art, a blend of timeless technique and modern design.",
+    "text": "Timeless design, modern home."
+  }},
+  {{
+    "scene": "The vase is placed in a cozy living room, bringing warmth and color to the space.",
+    "voiceover": "Bring home a piece of art that brightens your space and supports local craftsmanship.",
+    "text": "Support local artisans."
+  }},
+  {{
+    "scene": "A final shot with the artisan's brand logo and website URL.",
+    "voiceover": "Find your perfect piece and bring home tradition today.",
+    "text": "Shop now at [Your Website]."
+  }}
+]
+"""
+
+
+def generate_script(artisan_name, product, material, inspiration, target_audience):
+    """
+    Uses Gemini to create a marketing reel script.
+    Returns a list of dictionaries with scene, voiceover, and text.
+    """
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    prompt = build_prompt(artisan_name, product, material, inspiration, target_audience)
+
+    try:
+        response = model.generate_content(prompt)
+        raw_text = response.text.strip()
+    except Exception as e:
+        print(f"❌ Error during Gemini API call: {e}")
+        return None  # Correctly indented
+
+    json_match = re.search(r"```json\n(.*)\n```", raw_text, re.DOTALL)
+    if json_match:
+        text_to_parse = json_match.group(1).strip()
+    else:
+        text_to_parse = raw_text
+
+    try:
+        data = json.loads(text_to_parse)
+        if isinstance(data, list) and all(isinstance(s, dict) and "scene" in s and "voiceover" in s for s in data):
+            return [
+                {
+                    "scene": s.get("scene", "").strip(),
+                    "voiceover": s.get("voiceover", "").strip(),
+                    "text": s.get("text", "").strip(),
+                }
+                for s in data
+            ]
+        else:
+            print("⚠️ Parsed JSON but it does not match the expected format.")
+            return None  # Correctly indented
+
+    except JSONDecodeError as e:
+        print(f"❌ JSON parsing failed: {e}")
+        return None  # Correctly indented
+
+
+# --- Example Usage for a Hackathon Demo ---
+if __name__ == "__main__":
+    test_script = generate_script(
+        artisan_name="Aisha",
+        product="Hand-stitched Leather Journal",
+        material="Full-grain cowhide, recycled paper",
+        inspiration="Classic travel diaries",
+        target_audience="Writers, students, adventurers"
     )
 
-    # Generate content
-    response = model.generate_content(prompt)
-    story = response.text
-
-    # Print output
-    print("\n📖 Marketing Story Package:\n")
-    print(story)
-
-    # Save to file
-    filename = f"{artisan_name}_{product}_marketing_story.txt".replace(" ", "_")
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(story)
-
-    print(f"\n✅ Story saved as '{filename}'")
-
-    # Ask if user wants another story
-    again = input("\nDo you want to generate another artisan story? (yes/no): ").strip().lower()
-    if again != "yes":
-        print("\n👋 Thank you for supporting local artisans with storytelling. Goodbye!")
-        break
+    if test_script:
+        print("✅ Successfully generated and parsed a valid script:")
+        print(json.dumps(test_script, indent=2))
+    else:
+        print("❌ Script generation and parsing failed.")
